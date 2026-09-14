@@ -2,66 +2,37 @@
 //! a tag is a field number and a wire type, and the wire type says how long
 //! the value is. Unknown fields are skipped, as every decoder must; a known
 //! field whose wire type is not the schema's is the departure.
+//!
+//! The cursor and the base-128 varint are the capability's, shared with Avro
+//! (ADR-0044); what is protobuf's is the length-delimited value and the skip
+//! by wire type, added to the cursor as [`Wire`].
 
 use crate::proto::{File, Kind, Message};
+pub use contract::varint::Reader;
+pub use contract::varint::encode as encode_varint;
 
-/// A cursor over encoded bytes.
-pub struct Reader<'a> {
-    bytes: &'a [u8],
-    at: usize,
-}
-
-impl<'a> Reader<'a> {
-    #[must_use]
-    pub const fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, at: 0 }
-    }
-
-    #[must_use]
-    pub const fn is_done(&self) -> bool {
-        self.at >= self.bytes.len()
-    }
-
-    fn take(&mut self, count: usize, what: &str) -> Result<&'a [u8], String> {
-        let end = self
-            .at
-            .checked_add(count)
-            .filter(|end| *end <= self.bytes.len())
-            .ok_or_else(|| format!("{what} runs past the end"))?;
-        let slice = &self.bytes[self.at..end];
-        self.at = end;
-        Ok(slice)
-    }
-
-    /// One base-128 varint, at most ten bytes.
-    ///
-    /// # Errors
-    /// A varint that does not terminate, or the end.
-    pub fn varint(&mut self) -> Result<u64, String> {
-        let mut value: u64 = 0;
-        for shift in (0..70).step_by(7) {
-            let byte = self.take(1, "a varint")?[0];
-            if shift < 64 {
-                value |= u64::from(byte & 0x7f) << shift;
-            }
-            if byte & 0x80 == 0 {
-                return Ok(value);
-            }
-        }
-        Err("a varint over ten bytes".to_string())
-    }
-
+/// What reading the wire format adds to the varint cursor.
+pub trait Wire<'a> {
     /// A length-delimited value.
     ///
     /// # Errors
     /// A length past the end.
-    pub fn delimited(&mut self) -> Result<&'a [u8], String> {
+    fn delimited(&mut self) -> Result<&'a [u8], String>;
+
+    /// Walk the value of wire type `wire` without a schema.
+    ///
+    /// # Errors
+    /// A wire type that does not exist, a group, or a value past the end.
+    fn skip(&mut self, wire: u64) -> Result<(), String>;
+}
+
+impl<'a> Wire<'a> for Reader<'a> {
+    fn delimited(&mut self) -> Result<&'a [u8], String> {
         let length = self.varint()?;
         let length = usize::try_from(length).map_err(|_| "a length too large".to_string())?;
         self.take(length, "a length-delimited value")
     }
 
-    /// Walk the value of wire type `wire` without a schema.
     fn skip(&mut self, wire: u64) -> Result<(), String> {
         match wire {
             0 => self.varint().map(|_| ()),
@@ -172,21 +143,6 @@ pub fn walk(bytes: &[u8], message: &Message, file: &File, path: &str) -> Result<
         }
     }
     Ok(())
-}
-
-/// `value` as a varint.
-#[must_use]
-pub fn encode_varint(mut value: u64) -> Vec<u8> {
-    let mut out = Vec::with_capacity(10);
-    loop {
-        let byte = u8::try_from(value & 0x7f).unwrap_or(0);
-        value >>= 7;
-        if value == 0 {
-            out.push(byte);
-            return out;
-        }
-        out.push(byte | 0x80);
-    }
 }
 
 /// A tag for `number` and `wire`.

@@ -113,10 +113,7 @@ impl Contract for Protobuf {
             None => wire::walk_bare(stream.bytes()),
         };
         Ok(match outcome {
-            Ok(()) => ValidationResult {
-                valid: true,
-                issues: Vec::new(),
-            },
+            Ok(()) => ValidationResult::of(Vec::new()),
             Err(message) => {
                 let (message, path) = match message.rsplit_once(" at ") {
                     Some((message, path)) if self.bound.is_some() => {
@@ -124,14 +121,7 @@ impl Contract for Protobuf {
                     }
                     _ => (message, None),
                 };
-                ValidationResult {
-                    valid: false,
-                    issues: vec![ValidationIssue {
-                        code: "malformed".to_string(),
-                        message,
-                        path,
-                    }],
-                }
+                ValidationResult::of(vec![ValidationIssue::new("malformed", &message, path)])
             }
         })
     }
