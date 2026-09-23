@@ -213,7 +213,7 @@ mod tests {
         assert!(walk_bare(&short).is_err());
 
         let mut packed = encode_delimited(3, &[]);
-        packed.truncate(0);
+        packed.clear();
         packed.extend(encode_tag(3, 0));
         packed.push(7);
         let error = walk(&packed, message, &file, "order").expect_err("lines are messages");
