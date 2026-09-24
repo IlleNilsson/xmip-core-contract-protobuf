@@ -18,6 +18,8 @@ path = "src/lib.rs"
 # (repository-model.md). The Contract trait and its value types live there.
 contract = { package = "xmip-core-contract", git = "https://github.com/IlleNilsson/xmip-core-contract", branch = "main" }
 stream = { package = "xmip-core-stream", git = "https://github.com/IlleNilsson/xmip-core-stream", branch = "main" }
+# The character reader every lexer walks its text with.
+codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNilsson/xmip-core-library-codec", branch = "main" }
 # The wire format's one walk, which the protobuf shape sections by too; this
 # contract holds what it finds to a schema (open-problems.md, problem 25, c).
 message = { package = "xmip-core-message", git = "https://github.com/IlleNilsson/xmip-core-message", branch = "main" }

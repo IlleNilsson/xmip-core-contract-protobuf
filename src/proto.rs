@@ -7,6 +7,7 @@
 //! an import needs a file system and a search path, which is the factory's
 //! next layer, not the parser's.
 
+use codec::char_reader::CharReader;
 use std::collections::HashMap;
 
 /// What a field's bytes are.
@@ -320,49 +321,41 @@ fn full_name(package: &str, scope: &[String], name: &str) -> String {
 }
 
 /// Names, numbers, strings and the punctuation that matters, comments gone.
+/// Whitespace is any Unicode whitespace; a string keeps its quotes.
 fn tokenize(text: &str) -> Result<Vec<String>, String> {
-    let chars: Vec<char> = text.chars().collect();
+    let mut reader = CharReader::new(text);
     let mut tokens = Vec::new();
-    let mut at = 0;
-    while at < chars.len() {
-        let c = chars[at];
-        if c.is_whitespace() {
-            at += 1;
-        } else if c == '/' && chars.get(at + 1) == Some(&'/') {
-            while at < chars.len() && chars[at] != '\n' {
-                at += 1;
+    while let Some(c) = reader.peek() {
+        if reader.skip_whitespace() {
+            continue;
+        }
+        if reader.eat_str("//") {
+            reader.take_while(|c| c != '\n');
+        } else if reader.eat_str("/*") {
+            if !reader.skip_past("*/") {
+                return Err("a comment that never closes".to_string());
             }
-        } else if c == '/' && chars.get(at + 1) == Some(&'*') {
-            let close = chars[at + 2..]
-                .windows(2)
-                .position(|w| w == ['*', '/'])
-                .ok_or_else(|| "a comment that never closes".to_string())?;
-            at += close + 4;
         } else if c == '"' || c == '\'' {
-            let start = at;
-            at += 1;
-            while at < chars.len() && chars[at] != c {
-                at += usize::from(chars[at] == '\\') + 1;
+            let start = reader.offset();
+            reader.bump();
+            loop {
+                match reader.bump() {
+                    Some('\\') => {
+                        reader.bump();
+                    }
+                    Some(close) if close == c => break,
+                    Some(_) => {}
+                    None => return Err("a string that never closes".to_string()),
+                }
             }
-            if at >= chars.len() {
-                return Err("a string that never closes".to_string());
-            }
-            at += 1;
-            tokens.push(chars[start..at].iter().collect());
+            tokens.push(reader.since(start).to_string());
         } else if c == '_' || c == '.' || c.is_alphanumeric() || c == '-' {
-            let start = at;
-            while at < chars.len()
-                && (chars[at] == '_'
-                    || chars[at] == '.'
-                    || chars[at] == '-'
-                    || chars[at].is_alphanumeric())
-            {
-                at += 1;
-            }
-            tokens.push(chars[start..at].iter().collect());
+            let word =
+                reader.take_while(|c| c == '_' || c == '.' || c == '-' || c.is_alphanumeric());
+            tokens.push(word.to_string());
         } else {
+            reader.bump();
             tokens.push(c.to_string());
-            at += 1;
         }
     }
     Ok(tokens)
@@ -444,5 +437,19 @@ pub(crate) mod tests {
         assert!(File::parse("option x = \"open;").is_err(), "string");
         let empty = File::parse("syntax = \"proto3\";").expect("no messages is still a file");
         assert!(empty.messages.is_empty());
+    }
+
+    #[test]
+    fn multibyte_whitespace_comments_and_strings_read_without_panic() {
+        let text = "package\u{a0}shop;\u{3000}// é\nmessage\u{2003}Größe /* 名前 */ {\n\
+                    string\u{a0}naïve = 1;\u{a0}}\noption x = \"Zoë\u{a0}\";";
+        let file = File::parse(text).expect("parse");
+        assert_eq!(file.package, "shop");
+        let message = file.message("shop.Größe").expect("the message");
+        assert_eq!(message.fields[&1].name, "naïve");
+        assert_eq!(message.fields[&1].kind, Kind::Text);
+        assert!(File::parse("message A { string x = 1; } € ").is_err());
+        assert!(File::parse("option x = \"öpen\u{a0}").is_err());
+        assert!(File::parse("/* öpen\u{a0}").is_err());
     }
 }
