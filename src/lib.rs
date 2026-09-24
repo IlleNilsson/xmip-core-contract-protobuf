@@ -160,13 +160,13 @@ impl ContractFactory for ProtobufFactory {
 mod tests {
     use super::*;
     use crate::proto::tests::ORDER;
+    use codec::varint;
     use message::protobuf::{WireType, encode_delimited, encode_tag};
-    use message::scan::encode_varint;
     use xcore::StreamId;
 
     fn order() -> Vec<u8> {
         let mut out = encode_tag(1, WireType::Varint);
-        out.extend(encode_varint(4711));
+        out.extend(varint::encode(4711));
         out.extend(encode_delimited(2, b"ACME"));
         let mut line = encode_delimited(1, b"X001");
         line.extend(encode_tag(2, WireType::Varint));
