@@ -16,9 +16,11 @@ path = "src/lib.rs"
 [dependencies]
 # A Technology depends on its parent Capability, never the reverse
 # (repository-model.md). The Contract trait and its value types live there.
-# Standard library otherwise: wire format is tags and lengths.
 contract = { package = "xmip-core-contract", git = "https://github.com/IlleNilsson/xmip-core-contract", branch = "main" }
 stream = { package = "xmip-core-stream", git = "https://github.com/IlleNilsson/xmip-core-stream", branch = "main" }
+# The wire format's one walk, which the protobuf shape sections by too; this
+# contract holds what it finds to a schema (open-problems.md, problem 25, c).
+message = { package = "xmip-core-message", git = "https://github.com/IlleNilsson/xmip-core-message", branch = "main" }
 
 [dev-dependencies]
 xcore = { package = "xmip-core", git = "https://github.com/IlleNilsson/xmip-core", branch = "main" }

@@ -1,65 +1,29 @@
-//! The protobuf wire format, walked by schema without keeping what is read:
-//! a tag is a field number and a wire type, and the wire type says how long
-//! the value is. Unknown fields are skipped, as every decoder must; a known
-//! field whose wire type is not the schema's is the departure.
+//! The protobuf wire format, checked against a schema. Finding the fields —
+//! tags, wire types, lengths, groups, the format's range of field numbers —
+//! is the Foundation's walk, `message::protobuf`, which the protobuf shape
+//! sections by too; what is the contract's is holding each field it finds to
+//! the `.proto` file: the wire type the schema expects, UTF-8 in a string, an
+//! embedded message walked as its type. Unknown fields are left alone, as
+//! every decoder must; a known field whose wire type is not the schema's is
+//! the departure.
 //!
-//! The cursor and the base-128 varint are the capability's, shared with Avro
-//! (ADR-0044); what is protobuf's is the length-delimited value and the skip
-//! by wire type, added to the cursor as [`Wire`].
+//! This module walked the wire itself until 2026-09-23, by different rules
+//! from the shape's: it refused every group, a proto2 one or an unknown field
+//! that was one, and let field numbers past 2^29 - 1 through (open-problems.md,
+//! problem 25, row c).
 
 use crate::proto::{File, Kind, Message};
-pub use contract::varint::Reader;
-pub use contract::varint::encode as encode_varint;
-
-/// What reading the wire format adds to the varint cursor.
-pub trait Wire<'a> {
-    /// A length-delimited value.
-    ///
-    /// # Errors
-    /// A length past the end.
-    fn delimited(&mut self) -> Result<&'a [u8], String>;
-
-    /// Walk the value of wire type `wire` without a schema.
-    ///
-    /// # Errors
-    /// A wire type that does not exist, a group, or a value past the end.
-    fn skip(&mut self, wire: u64) -> Result<(), String>;
-}
-
-impl<'a> Wire<'a> for Reader<'a> {
-    fn delimited(&mut self) -> Result<&'a [u8], String> {
-        let length = self.varint()?;
-        let length = usize::try_from(length).map_err(|_| "a length too large".to_string())?;
-        self.take(length, "a length-delimited value")
-    }
-
-    fn skip(&mut self, wire: u64) -> Result<(), String> {
-        match wire {
-            0 => self.varint().map(|_| ()),
-            1 => self.take(8, "a fixed64").map(|_| ()),
-            2 => self.delimited().map(|_| ()),
-            5 => self.take(4, "a fixed32").map(|_| ()),
-            3 | 4 => Err("a group, which proto3 does not have".to_string()),
-            other => Err(format!("wire type {other} does not exist")),
-        }
-    }
-}
+use message::Stop;
+use message::protobuf::{Reader, WireType, fields};
+use message::scan::varint;
 
 /// Walk `bytes` as fields with no schema: every tag sound, every value as
 /// long as its wire type says.
 ///
 /// # Errors
-/// The first departure.
+/// The first departure, with the byte it was found at.
 pub fn walk_bare(bytes: &[u8]) -> Result<(), String> {
-    let mut reader = Reader::new(bytes);
-    while !reader.is_done() {
-        let tag = reader.varint()?;
-        if tag >> 3 == 0 {
-            return Err("field number 0".to_string());
-        }
-        reader.skip(tag & 7)?;
-    }
-    Ok(())
+    fields(bytes, 0..bytes.len()).map(|_| ()).map_err(placed)
 }
 
 /// Walk `bytes` as a `message` of `file`, saying where it stops being one.
@@ -67,123 +31,132 @@ pub fn walk_bare(bytes: &[u8]) -> Result<(), String> {
 /// # Errors
 /// The first departure, with the path to it.
 pub fn walk(bytes: &[u8], message: &Message, file: &File, path: &str) -> Result<(), String> {
-    let mut reader = Reader::new(bytes);
-    while !reader.is_done() {
-        let tag = reader.varint().map_err(|m| format!("{m} at {path}"))?;
-        let number =
-            u32::try_from(tag >> 3).map_err(|_| format!("a field number too large at {path}"))?;
-        let wire = tag & 7;
-        if number == 0 {
-            return Err(format!("field number 0 at {path}"));
-        }
-        let Some(field) = message.fields.get(&number) else {
-            reader
-                .skip(wire)
-                .map_err(|m| format!("{m} in unknown field {number} at {path}"))?;
+    let mut reader = Reader::new(bytes, 0..bytes.len());
+    let stopped = |stop| format!("{} at {path}", placed(stop));
+    while let Some(tag) = reader.tag().map_err(stopped)? {
+        let Some(declared) = message.fields.get(&tag.number) else {
+            reader.value(tag).map_err(|stop| {
+                format!("{} in unknown field {} at {path}", placed(stop), tag.number)
+            })?;
             continue;
         };
-        let at = format!("{path}.{}", field.name);
-        let expected = match &field.kind {
-            Kind::Varint => 0,
-            Kind::Fixed64 => 1,
-            Kind::Fixed32 => 5,
-            _ => 2,
-        };
-        if wire == 2 && expected != 2 && field.repeated {
-            // A packed repeated scalar: the values back to back.
-            let packed = reader.delimited().map_err(|m| format!("{m} at {at}"))?;
-            let mut inner = Reader::new(packed);
-            while !inner.is_done() {
-                inner
-                    .skip(expected)
-                    .map_err(|m| format!("{m} in packed {at}"))?;
-            }
-            continue;
-        }
-        if wire != expected {
+        let at = format!("{path}.{}", declared.name);
+        let expected = expected(&declared.kind);
+        let packed_scalar =
+            tag.wire == WireType::Len && expected != WireType::Len && declared.repeated;
+        // Judged at the tag, before the value is read: a varint read as a
+        // length runs past the end, and the departure is the field, not the
+        // end of the message.
+        if tag.wire != expected && !packed_scalar {
             return Err(format!(
-                "wire type {wire} where {} is {expected} at {at}",
-                field.name
+                "wire type {} where {} is {} at {at}",
+                tag.wire.number(),
+                declared.name,
+                expected.number()
             ));
         }
-        match &field.kind {
-            Kind::Varint | Kind::Fixed64 | Kind::Fixed32 => {
-                reader.skip(wire).map_err(|m| format!("{m} at {at}"))?;
-            }
-            Kind::Bytes | Kind::Opaque => {
-                reader.delimited().map_err(|m| format!("{m} at {at}"))?;
-            }
-            Kind::Text => {
-                let value = reader.delimited().map_err(|m| format!("{m} at {at}"))?;
-                std::str::from_utf8(value)
-                    .map_err(|_| format!("a string that is not UTF-8 at {at}"))?;
-            }
-            Kind::Message(name) => {
-                let value = reader.delimited().map_err(|m| format!("{m} at {at}"))?;
-                match file.messages.get(name) {
-                    Some(inner) => walk(value, inner, file, &at)?,
-                    None => walk_bare(value).map_err(|m| format!("{m} at {at}"))?,
-                }
-            }
-            Kind::Map(key, value) => {
-                let entry = reader.delimited().map_err(|m| format!("{m} at {at}"))?;
-                let mut fields = std::collections::HashMap::new();
-                for (number, kind) in [(1, key), (2, value)] {
-                    fields.insert(
-                        number,
-                        crate::proto::Field {
-                            name: if number == 1 { "key" } else { "value" }.to_string(),
-                            kind: (**kind).clone(),
-                            repeated: false,
-                        },
-                    );
-                }
-                walk(entry, &Message { fields }, file, &at)?;
-            }
+        let value = &bytes[reader
+            .value(tag)
+            .map_err(|stop| format!("{} at {at}", placed(stop)))?];
+        if packed_scalar {
+            packed(value, expected).map_err(|m| format!("{m} in packed {at}"))?;
+            continue;
         }
+        check(value, &declared.kind, file, &at)?;
     }
     Ok(())
 }
 
-/// A tag for `number` and `wire`.
-#[must_use]
-pub fn encode_tag(number: u32, wire: u64) -> Vec<u8> {
-    encode_varint((u64::from(number) << 3) | wire)
+/// Hold one field's value to what the schema declares it to be.
+fn check(value: &[u8], kind: &Kind, file: &File, at: &str) -> Result<(), String> {
+    match kind {
+        Kind::Varint | Kind::Fixed64 | Kind::Fixed32 | Kind::Bytes | Kind::Opaque => Ok(()),
+        Kind::Text => std::str::from_utf8(value)
+            .map(|_| ())
+            .map_err(|_| format!("a string that is not UTF-8 at {at}")),
+        Kind::Message(name) => match file.messages.get(name) {
+            Some(inner) => walk(value, inner, file, at),
+            None => walk_bare(value).map_err(|m| format!("{m} at {at}")),
+        },
+        Kind::Map(key, value_kind) => {
+            let mut entry = std::collections::HashMap::new();
+            for (number, kind) in [(1, key), (2, value_kind)] {
+                entry.insert(
+                    number,
+                    crate::proto::Field {
+                        name: if number == 1 { "key" } else { "value" }.to_string(),
+                        kind: (**kind).clone(),
+                        repeated: false,
+                    },
+                );
+            }
+            walk(value, &Message { fields: entry }, file, at)
+        }
+    }
 }
 
-/// A length-delimited field `number` holding `bytes`.
-#[must_use]
-pub fn encode_delimited(number: u32, bytes: &[u8]) -> Vec<u8> {
-    let mut out = encode_tag(number, 2);
-    out.extend(encode_varint(bytes.len() as u64));
-    out.extend_from_slice(bytes);
-    out
+/// The wire type a field of `kind` travels as.
+const fn expected(kind: &Kind) -> WireType {
+    match kind {
+        Kind::Varint => WireType::Varint,
+        Kind::Fixed64 => WireType::I64,
+        Kind::Fixed32 => WireType::I32,
+        _ => WireType::Len,
+    }
+}
+
+/// A packed repeated scalar: values of `wire` back to back, the last ending
+/// exactly where `value` does.
+fn packed(value: &[u8], wire: WireType) -> Result<(), String> {
+    let width = match wire {
+        WireType::I64 => 8,
+        WireType::I32 => 4,
+        _ => {
+            let mut at = 0;
+            while at < value.len() {
+                at = varint(value, at).map_err(placed)?.1;
+            }
+            return Ok(());
+        }
+    };
+    if value.len().is_multiple_of(width) {
+        Ok(())
+    } else {
+        Err(format!("{} bytes of {width}-byte values", value.len()))
+    }
+}
+
+/// A stop in the walk, with the byte it was found at.
+fn placed((reason, at): Stop) -> String {
+    format!("{reason} (byte {at})")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::proto::tests::ORDER;
+    use message::protobuf::{encode_delimited, encode_tag};
+    use message::scan::encode_varint;
 
     pub fn order(id: u64, customer: &str, qty: u64) -> Vec<u8> {
         let mut line = encode_delimited(1, b"X001");
-        line.extend(encode_tag(2, 0));
+        line.extend(encode_tag(2, WireType::Varint));
         line.extend(encode_varint(qty));
-        let mut price = encode_tag(1, 1);
+        let mut price = encode_tag(1, WireType::I64);
         price.extend_from_slice(&10.5f64.to_le_bytes());
         line.extend(encode_delimited(3, &price));
-        let mut out = encode_tag(1, 0);
+        let mut out = encode_tag(1, WireType::Varint);
         out.extend(encode_varint(id));
         out.extend(encode_delimited(2, customer.as_bytes()));
         out.extend(encode_delimited(3, &line));
-        out.extend(encode_tag(4, 0));
+        out.extend(encode_tag(4, WireType::Varint));
         out.extend(encode_varint(1));
         let mut entry = encode_delimited(1, b"vip");
-        entry.extend(encode_tag(2, 0));
+        entry.extend(encode_tag(2, WireType::Varint));
         entry.push(1);
         out.extend(encode_delimited(5, &entry));
         out.extend(encode_delimited(8, &[8, 1]));
-        out.extend(encode_tag(99, 5));
+        out.extend(encode_tag(99, WireType::I32));
         out.extend_from_slice(&[0, 0, 0, 0]);
         out
     }
@@ -197,7 +170,7 @@ mod tests {
         walk_bare(&bytes).expect("bare");
 
         let mut wrong_wire = bytes.clone();
-        wrong_wire[0] = encode_tag(1, 2)[0];
+        wrong_wire[0] = encode_tag(1, WireType::Len)[0];
         let error = walk(&wrong_wire, message, &file, "order").expect_err("wire");
         assert!(error.contains("where id is 0 at order.id"), "{error}");
 
@@ -214,7 +187,7 @@ mod tests {
 
         let mut packed = encode_delimited(3, &[]);
         packed.clear();
-        packed.extend(encode_tag(3, 0));
+        packed.extend(encode_tag(3, WireType::Varint));
         packed.push(7);
         let error = walk(&packed, message, &file, "order").expect_err("lines are messages");
         assert!(error.contains("order.lines"), "{error}");
@@ -232,9 +205,41 @@ mod tests {
             walk(&cut, message, &file, "p").is_err(),
             "a packed varint cut off"
         );
-        assert!(walk_bare(&encode_tag(1, 3)).is_err(), "a group");
-        assert!(walk_bare(&encode_tag(0, 0)).is_err(), "field 0");
+        assert!(
+            walk_bare(&encode_tag(1, WireType::Group)).is_err(),
+            "a group never closed"
+        );
+        assert!(
+            walk_bare(&encode_tag(0, WireType::Varint)).is_err(),
+            "field 0"
+        );
         assert!(walk_bare(&[0x80; 11]).is_err(), "eleven bytes");
         assert_eq!(encode_varint(300), [0xac, 0x02]);
+    }
+
+    #[test]
+    fn a_group_is_walked_and_the_field_range_is_the_format_s() {
+        // Row c of problem 25: this contract refused every group and let a
+        // field number past 2^29 - 1 through, where the shape did neither.
+        // Both now read one walk, and a well-formed group — proto2's, or an
+        // unknown field that happens to be one — is walked, not refused.
+        let mut group = encode_tag(7, WireType::Group);
+        group.extend(encode_tag(1, WireType::Varint));
+        group.push(1);
+        group.extend(encode_varint((7 << 3) | 4)); // the group's end tag
+        walk_bare(&group).expect("a closed group is sound wire format");
+
+        let file = File::parse("message P { string s = 2; }").expect("p");
+        let message = file.message("P").expect("P");
+        let mut with_unknown_group = group.clone();
+        with_unknown_group.extend(encode_delimited(2, b"ok"));
+        walk(&with_unknown_group, message, &file, "p").expect("an unknown group is skipped");
+
+        let past_the_range = encode_varint(1 << 32);
+        let error = walk_bare(&past_the_range).expect_err("field 2^29");
+        assert!(
+            error.starts_with("a field number outside the format's range"),
+            "{error}"
+        );
     }
 }
