@@ -23,11 +23,11 @@
 pub mod proto;
 pub mod wire;
 
-use contract::{
+pub use proto::File;
+use sdk::contract::{
     Contract, ContractDescriptor, ContractError, ContractFactory, ContractId, ValidationIssue,
     ValidationResult,
 };
-pub use proto::File;
 use stream::Stream;
 
 /// The protobuf contract, bare or bound to a message type.
