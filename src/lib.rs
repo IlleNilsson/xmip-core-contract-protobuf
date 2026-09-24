@@ -160,15 +160,16 @@ impl ContractFactory for ProtobufFactory {
 mod tests {
     use super::*;
     use crate::proto::tests::ORDER;
-    use crate::wire::{encode_delimited, encode_tag, encode_varint};
+    use message::protobuf::{WireType, encode_delimited, encode_tag};
+    use message::scan::encode_varint;
     use xcore::StreamId;
 
     fn order() -> Vec<u8> {
-        let mut out = encode_tag(1, 0);
+        let mut out = encode_tag(1, WireType::Varint);
         out.extend(encode_varint(4711));
         out.extend(encode_delimited(2, b"ACME"));
         let mut line = encode_delimited(1, b"X001");
-        line.extend(encode_tag(2, 0));
+        line.extend(encode_tag(2, WireType::Varint));
         line.push(2);
         out.extend(encode_delimited(3, &line));
         out
@@ -214,7 +215,7 @@ mod tests {
         let file = File::parse(ORDER).expect("schema");
         let bound = Protobuf::of(file, "shop.v1.Order").expect("bound");
         let mut bad = order();
-        bad[0] = encode_tag(2, 0)[0]; // customer as a varint
+        bad[0] = encode_tag(2, WireType::Varint)[0]; // customer as a varint
         let result = bound.validate(&stream(bad, None)).expect("validate");
         assert!(!result.valid);
         assert_eq!(result.issues[0].code, "malformed");
