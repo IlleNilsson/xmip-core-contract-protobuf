@@ -2,6 +2,10 @@
 
 Protocol Buffers content contract: sound wire format always, walked as a bound message type of a .proto file when a Location names one. A technology of [xmip-core-contract](https://github.com/IlleNilsson/xmip-core-contract).
 
+A `.proto` file is read through `xmip-core-library-codec`'s character
+reader: any Unicode whitespace separates tokens, and a name may hold any
+letter.
+
 ## Toolchain
 
 `rust-toolchain.toml` pins the toolchain for the whole estate. Do not change it
