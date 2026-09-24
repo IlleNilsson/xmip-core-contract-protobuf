@@ -135,22 +135,22 @@ fn placed((reason, at): Stop) -> String {
 mod tests {
     use super::*;
     use crate::proto::tests::ORDER;
+    use codec::varint;
     use message::protobuf::{encode_delimited, encode_tag};
-    use message::scan::encode_varint;
 
     pub fn order(id: u64, customer: &str, qty: u64) -> Vec<u8> {
         let mut line = encode_delimited(1, b"X001");
         line.extend(encode_tag(2, WireType::Varint));
-        line.extend(encode_varint(qty));
+        line.extend(varint::encode(qty));
         let mut price = encode_tag(1, WireType::I64);
         price.extend_from_slice(&10.5f64.to_le_bytes());
         line.extend(encode_delimited(3, &price));
         let mut out = encode_tag(1, WireType::Varint);
-        out.extend(encode_varint(id));
+        out.extend(varint::encode(id));
         out.extend(encode_delimited(2, customer.as_bytes()));
         out.extend(encode_delimited(3, &line));
         out.extend(encode_tag(4, WireType::Varint));
-        out.extend(encode_varint(1));
+        out.extend(varint::encode(1));
         let mut entry = encode_delimited(1, b"vip");
         entry.extend(encode_tag(2, WireType::Varint));
         entry.push(1);
@@ -175,7 +175,7 @@ mod tests {
         assert!(error.contains("where id is 0 at order.id"), "{error}");
 
         let mut bad_utf8 = bytes.clone();
-        let at = 1 + encode_varint(4711).len() + 2;
+        let at = 1 + varint::encode(4711).len() + 2;
         bad_utf8[at] = 0xff;
         let error = walk(&bad_utf8, message, &file, "order").expect_err("utf-8");
         assert_eq!(error, "a string that is not UTF-8 at order.customer");
@@ -214,7 +214,7 @@ mod tests {
             "field 0"
         );
         assert!(walk_bare(&[0x80; 11]).is_err(), "eleven bytes");
-        assert_eq!(encode_varint(300), [0xac, 0x02]);
+        assert_eq!(varint::encode(300), [0xac, 0x02]);
     }
 
     #[test]
@@ -226,7 +226,7 @@ mod tests {
         let mut group = encode_tag(7, WireType::Group);
         group.extend(encode_tag(1, WireType::Varint));
         group.push(1);
-        group.extend(encode_varint((7 << 3) | 4)); // the group's end tag
+        group.extend(varint::encode((7 << 3) | 4)); // the group's end tag
         walk_bare(&group).expect("a closed group is sound wire format");
 
         let file = File::parse("message P { string s = 2; }").expect("p");
@@ -235,7 +235,7 @@ mod tests {
         with_unknown_group.extend(encode_delimited(2, b"ok"));
         walk(&with_unknown_group, message, &file, "p").expect("an unknown group is skipped");
 
-        let past_the_range = encode_varint(1 << 32);
+        let past_the_range = varint::encode(1 << 32);
         let error = walk_bare(&past_the_range).expect_err("field 2^29");
         assert!(
             error.starts_with("a field number outside the format's range"),
