@@ -23,6 +23,7 @@
 pub mod proto;
 pub mod wire;
 
+use contract::place::Place;
 use contract::{
     Contract, ContractDescriptor, ContractError, ContractFactory, ContractId, ValidationIssue,
     ValidationResult,
@@ -108,7 +109,9 @@ impl Contract for Protobuf {
     fn validate(&self, stream: &Stream) -> Result<ValidationResult, ContractError> {
         let outcome = match &self.bound {
             Some((file, name)) => match file.messages.get(name) {
-                Some(message) => wire::walk(stream.bytes(), message, file, name),
+                Some(message) => {
+                    wire::walk(stream.bytes(), message, file, &Place::Root.field(name))
+                }
                 None => Err(format!("the schema lost message {name}")),
             },
             None => wire::walk_bare(stream.bytes()),
@@ -184,7 +187,7 @@ mod tests {
     fn order() -> Vec<u8> {
         let mut out = encode_tag(1, WireType::Varint);
         out.extend(varint::encode(4711));
-        out.extend(encode_delimited(2, b"ACME"));
+        out.extend(encode_delimited(2, b"partner-x"));
         let mut line = encode_delimited(1, b"X001");
         line.extend(encode_tag(2, WireType::Varint));
         line.push(2);
