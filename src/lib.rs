@@ -29,6 +29,7 @@ use contract::{
 };
 pub use proto::File;
 use stream::Stream;
+use xcore::settings::{Applies, Kind, Presence, Setting, Settings};
 
 /// The protobuf contract, bare or bound to a message type.
 pub struct Protobuf {
@@ -136,6 +137,10 @@ impl ContractFactory for ProtobufFactory {
         "protobuf"
     }
 
+    fn settings(&self) -> &'static Settings {
+        SETTINGS
+    }
+
     fn load(&self, reference: &str) -> Result<Box<dyn Contract>, ContractError> {
         let reference = reference.trim();
         if reference.is_empty() {
@@ -155,6 +160,18 @@ impl ContractFactory for ProtobufFactory {
         Ok(Box::new(Protobuf::of(file, message)?))
     }
 }
+
+/// What a Location gives this contract (ADR-0064, amendment 2026-09-26).
+const SETTINGS: &Settings = &Settings {
+    technology: env!("CARGO_PKG_NAME"),
+    settings: &[Setting {
+        name: "reference",
+        kind: Kind::Address,
+        presence: Presence::Optional,
+        meaning: "The proto file and message, orders.proto#shop.Order, messages are held to.",
+        applies: Applies::Both,
+    }],
+};
 
 #[cfg(test)]
 mod tests {
@@ -257,5 +274,38 @@ mod tests {
                 .contains(':')
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn protobuf_declares_its_settings_and_reads_through_them() {
+        assert!(SETTINGS.problems().is_empty(), "{:?}", SETTINGS.problems());
+        let given = |name: &str, value: &str| {
+            (
+                name.to_string(),
+                xcore::settings::Given::Text(value.to_string()),
+            )
+        };
+        assert!(ProtobufFactory.open(Applies::Both, &[]).is_ok(), "bare");
+        let unread = ProtobufFactory
+            .open(
+                Applies::Receive,
+                &[given("reference", "/no/such/orders.proto#shop.Order")],
+            )
+            .err()
+            .expect("an unread file is refused");
+        assert!(
+            unread.message.contains("/no/such/orders.proto"),
+            "{}",
+            unread.message
+        );
+        let refused = ProtobufFactory
+            .open(Applies::Send, &[given("unheard_of", "x")])
+            .err()
+            .expect("an unknown setting is refused");
+        assert!(
+            refused.message.contains("unheard_of"),
+            "{}",
+            refused.message
+        );
     }
 }
