@@ -187,7 +187,7 @@ mod tests {
     fn order() -> Vec<u8> {
         let mut out = encode_tag(1, WireType::Varint);
         out.extend(varint::encode(4711));
-        out.extend(encode_delimited(2, b"partner-x"));
+        out.extend(encode_delimited(2, b"party-x"));
         let mut line = encode_delimited(1, b"X001");
         line.extend(encode_tag(2, WireType::Varint));
         line.push(2);
