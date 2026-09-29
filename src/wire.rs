@@ -182,7 +182,7 @@ mod tests {
     fn a_message_walks_by_its_schema_and_departures_are_placed() {
         let file = File::parse(ORDER).expect("schema");
         let message = file.message("shop.v1.Order").expect("Order");
-        let bytes = order(4711, "partner-x", 2);
+        let bytes = order(4711, "party-x", 2);
         walk(&bytes, message, &file, &Place::Root.field("order")).expect("sound");
         walk_bare(&bytes).expect("bare");
 
