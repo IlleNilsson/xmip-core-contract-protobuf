@@ -33,7 +33,20 @@ pub fn walk_bare(bytes: &[u8]) -> Result<(), String> {
 /// # Errors
 /// The first departure, with the path to it.
 pub fn walk(bytes: &[u8], message: &Message, file: &File, place: &Place<'_>) -> Result<(), String> {
-    fields_of(bytes, file, place, |number| {
+    walk_at(bytes, message, file, place, 0)
+}
+
+/// [`walk`] at `depth` messages down: an embedded message and a map entry
+/// each go one deeper, and past [`codec::depth::MAX_DEPTH`] the bytes are
+/// refused, so a recursive message type cannot walk the stack down.
+fn walk_at(
+    bytes: &[u8],
+    message: &Message,
+    file: &File,
+    place: &Place<'_>,
+    depth: usize,
+) -> Result<(), String> {
+    fields_of(bytes, file, place, depth, |number| {
         message
             .fields
             .get(&number)
@@ -51,8 +64,11 @@ fn fields_of<'a>(
     bytes: &[u8],
     file: &File,
     place: &Place<'_>,
+    depth: usize,
     declared: impl Fn(u32) -> Option<Declared<'a>>,
 ) -> Result<(), String> {
+    codec::depth::within(depth, "a Protocol Buffers message")
+        .map_err(|deep| format!("{} at {}", deep.message, place.dotted()))?;
     let mut reader = Reader::new(bytes, 0..bytes.len());
     let stopped = |stop| format!("{} at {}", placed(stop), place.dotted());
     while let Some(tag) = reader.tag().map_err(stopped)? {
@@ -88,23 +104,30 @@ fn fields_of<'a>(
             packed(value, expected).map_err(|m| format!("{m} in packed {}", at.dotted()))?;
             continue;
         }
-        check(value, kind, file, &at)?;
+        check(value, kind, file, &at, depth + 1)?;
     }
     Ok(())
 }
 
-/// Hold one field's value to what the schema declares it to be.
-fn check(value: &[u8], kind: &Kind, file: &File, at: &Place<'_>) -> Result<(), String> {
+/// Hold one field's value to what the schema declares it to be, `depth`
+/// messages down.
+fn check(
+    value: &[u8],
+    kind: &Kind,
+    file: &File,
+    at: &Place<'_>,
+    depth: usize,
+) -> Result<(), String> {
     match kind {
         Kind::Varint | Kind::Fixed64 | Kind::Fixed32 | Kind::Bytes | Kind::Opaque => Ok(()),
         Kind::Text => std::str::from_utf8(value)
             .map(|_| ())
             .map_err(|_| format!("a string that is not UTF-8 at {}", at.dotted())),
         Kind::Message(name) => match file.messages.get(name) {
-            Some(inner) => walk(value, inner, file, at),
+            Some(inner) => walk_at(value, inner, file, at, depth),
             None => walk_bare(value).map_err(|m| format!("{m} at {}", at.dotted())),
         },
-        Kind::Map(key, entry) => fields_of(value, file, at, |number| match number {
+        Kind::Map(key, entry) => fields_of(value, file, at, depth, |number| match number {
             1 => Some(("key", &**key, false)),
             2 => Some(("value", &**entry, false)),
             _ => None,
@@ -211,6 +234,23 @@ mod tests {
         let error = walk(&packed, message, &file, &Place::Root.field("order"))
             .expect_err("lines are messages");
         assert!(error.contains("order.lines"), "{error}");
+    }
+
+    #[test]
+    fn a_message_nested_past_the_cap_is_refused_before_the_stack_is() {
+        let file = File::parse("message N { N next = 1; }").expect("n");
+        let message = file.message("N").expect("N");
+        let mut hostile = Vec::new();
+        for _ in 0..1_000 {
+            hostile = encode_delimited(1, &hostile);
+        }
+        let error = walk(&hostile, message, &file, &Place::Root).expect_err("deep");
+        assert!(error.contains("nests past the 64 levels"), "{error}");
+        let mut honest = Vec::new();
+        for _ in 0..10 {
+            honest = encode_delimited(1, &honest);
+        }
+        walk(&honest, message, &file, &Place::Root).expect("ten deep");
     }
 
     #[test]
