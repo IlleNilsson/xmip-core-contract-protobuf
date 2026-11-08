@@ -110,11 +110,11 @@ impl Contract for Protobuf {
         let outcome = match &self.bound {
             Some((file, name)) => match file.messages.get(name) {
                 Some(message) => {
-                    wire::walk(stream.bytes(), message, file, &Place::Root.field(name))
+                    wire::walk(stream.load()?, message, file, &Place::Root.field(name))
                 }
                 None => Err(format!("the schema lost message {name}")),
             },
-            None => wire::walk_bare(stream.bytes()),
+            None => wire::walk_bare(stream.load()?),
         };
         Ok(match outcome {
             Ok(()) => ValidationResult::of(Vec::new()),
