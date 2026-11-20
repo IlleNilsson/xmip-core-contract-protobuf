@@ -27,6 +27,10 @@ codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNil
 # contract holds what it finds to a schema (open-problems.md, problem 25, c).
 message = { package = "xmip-core-message", git = "https://github.com/IlleNilsson/xmip-core-message", branch = "main" }
 
+[dev-dependencies]
+# A test's own temporary folder (`file::temporary`); for the tests only.
+file = { package = "xmip-core-library-file", git = "https://github.com/IlleNilsson/xmip-core-library-file", branch = "main", features = ["test-support"] }
+
 [lints.rust]
 unsafe_code = "forbid"
 

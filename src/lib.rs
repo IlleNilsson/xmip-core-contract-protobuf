@@ -252,8 +252,7 @@ mod tests {
 
     #[test]
     fn the_factory_reads_a_file_and_names_a_message() {
-        let dir = std::env::temp_dir().join("xmip-protobuf-test");
-        std::fs::create_dir_all(&dir).expect("dir");
+        let dir = file::temporary::Folder::new("protobuf");
         let path = dir.join("orders.proto");
         std::fs::write(&path, ORDER).expect("write");
         let reference = format!("{}#shop.v1.Order", path.to_str().expect("path"));
