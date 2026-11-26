@@ -19,25 +19,43 @@
 //! a value, unknown fields skipped as the format requires. Imports are not
 //! followed: a field of an imported type is length-delimited and not looked
 //! into. Following them is the factory's next layer.
+//!
+//! **Built with its `declaration` feature alone** the crate is
+//! [`declaration`], what a Location naming it is configured with and the
+//! name a Validate step names it by, and none of the code above, which is
+//! behind the default feature: what the surfaces' library carries (ADR-0064,
+//! amendment 2026-11-26).
 
+#[cfg(feature = "declaration")]
+pub mod declaration;
+
+#[cfg(feature = "default")]
 pub mod proto;
+#[cfg(feature = "default")]
 pub mod wire;
 
+#[cfg(feature = "default")]
 use contract::place::Place;
+#[cfg(feature = "default")]
 use contract::{
     Contract, ContractDescriptor, ContractError, ContractFactory, ContractId, ValidationIssue,
     ValidationResult,
 };
+#[cfg(feature = "default")]
 pub use proto::File;
+#[cfg(feature = "default")]
 use stream::Stream;
-use xcore::settings::{Applies, Kind, Presence, Setting, Settings};
+#[cfg(feature = "default")]
+use xcore::settings::Settings;
 
 /// The protobuf contract, bare or bound to a message type.
+#[cfg(feature = "default")]
 pub struct Protobuf {
     descriptor: ContractDescriptor,
     bound: Option<(File, String)>,
 }
 
+#[cfg(feature = "default")]
 impl Protobuf {
     /// Sound wire format, of any message.
     #[must_use]
@@ -77,12 +95,14 @@ impl Protobuf {
     }
 }
 
+#[cfg(feature = "default")]
 impl Default for Protobuf {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(feature = "default")]
 fn descriptor(id: &str) -> ContractDescriptor {
     ContractDescriptor {
         id: ContractId(id.to_string()),
@@ -91,6 +111,7 @@ fn descriptor(id: &str) -> ContractDescriptor {
     }
 }
 
+#[cfg(feature = "default")]
 impl Contract for Protobuf {
     fn descriptor(&self) -> &ContractDescriptor {
         &self.descriptor
@@ -133,15 +154,17 @@ impl Contract for Protobuf {
 
 /// Loads the contract a Location names: an empty reference is the bare
 /// contract, anything else `path/to/file.proto#package.Message`.
+#[cfg(feature = "default")]
 pub struct ProtobufFactory;
 
+#[cfg(feature = "default")]
 impl ContractFactory for ProtobufFactory {
     fn technology(&self) -> &'static str {
-        "protobuf"
+        declaration::NAME
     }
 
     fn settings(&self) -> &'static Settings {
-        SETTINGS
+        declaration::SETTINGS
     }
 
     fn load(&self, reference: &str) -> Result<Box<dyn Contract>, ContractError> {
@@ -163,18 +186,6 @@ impl ContractFactory for ProtobufFactory {
         Ok(Box::new(Protobuf::of(file, message)?))
     }
 }
-
-/// What a Location gives this contract (ADR-0064, amendment 2026-09-26).
-const SETTINGS: &Settings = &Settings {
-    technology: env!("CARGO_PKG_NAME"),
-    settings: &[Setting {
-        name: "reference",
-        kind: Kind::Address,
-        presence: Presence::Optional,
-        meaning: "The proto file and message, orders.proto#shop.Order, messages are held to.",
-        applies: Applies::Both,
-    }],
-};
 
 #[cfg(test)]
 mod tests {
@@ -280,6 +291,8 @@ mod tests {
 
     #[test]
     fn protobuf_declares_its_settings_and_reads_through_them() {
+        use declaration::SETTINGS;
+        use xcore::settings::Applies;
         assert!(SETTINGS.problems().is_empty(), "{:?}", SETTINGS.problems());
         let given = |name: &str, value: &str| {
             (
