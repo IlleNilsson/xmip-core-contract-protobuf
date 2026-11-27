@@ -21,10 +21,7 @@
 //! into. Following them is the factory's next layer.
 //!
 //! **Built with its `declaration` feature alone** the crate is
-//! [`declaration`], what a Location naming it is configured with and the
-//! name a Validate step names it by, and none of the code above, which is
-//! behind the default feature: what the surfaces' library carries (ADR-0064,
-//! amendment 2026-11-26).
+//! [`declaration`].
 
 #[cfg(feature = "declaration")]
 pub mod declaration;
